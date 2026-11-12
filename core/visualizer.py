@@ -1,27 +1,25 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-
-import matplotlib.pyplot as plt
-import numpy as np
-
-def plot_tone_comparison(viz_t, viz_u, score):
+def plot_tone_comparison(viz_t: np.ndarray, viz_u: np.ndarray, final_score: float):
     """
-    Plots the Teacher's normalized pitch vs. the Student's aligned normalized pitch.
+    Plots the aligned semitone contours cleanly, without connecting distinct syllables.
     """
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 5))
     
-    # Plot Teacher (The Goal)
-    ax.plot(viz_t, label='Teacher (Reference)', color='green', linewidth=2)
+    if len(viz_t) > 0 and len(viz_u) > 0:
+        # NaNs in the array will naturally break the line between syllables
+        ax.plot(viz_t, label="Teacher (Target)", color="#2e7d32", linewidth=2.5, alpha=0.9)
+        ax.plot(viz_u, label="Student (You)", color="#1976d2", linewidth=2.5, linestyle="--", alpha=0.9)
     
-    # Plot Student (The Attempt)
-    ax.plot(viz_u, label='Student (Aligned)', color='blue', linestyle='--', linewidth=2)
+    ax.set_title(f"Tone Contour Comparison (Score: {final_score:.1f}%)", fontsize=14, pad=15)
+    ax.set_ylabel("Pitch (Relative Semitones)", fontsize=11)
+    ax.set_xlabel("Time (Aligned Frames)", fontsize=11)
     
-    ax.set_title(f"Tone Comparison (Score: {score:.2f}%)")
-    ax.set_xlabel("Time (DTW Aligned Frames)")
-    ax.set_ylabel("Normalized Pitch (Standard Deviations)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.legend(loc="upper right", framealpha=0.9)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
     
-    # Streamlit compatibility: return the figure object
+    fig.tight_layout()
     return fig
