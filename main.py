@@ -1,7 +1,5 @@
 from dsp.segmentation import split_into_n
 from pypinyin import lazy_pinyin
-from dsp.segmentation import split_into_n
-from pypinyin import lazy_pinyin
 import numpy as np
 import argparse
 import sys
