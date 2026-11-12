@@ -58,7 +58,7 @@ def calculate_segment_score(u_segment, t_segment):
     
     # 6. Fairer Scoring Math
     # Relaxed the distance threshold slightly (1.0 instead of 0.8)
-    dist_score = max(0, 100 * (1 - (avg_dist / 1.0)))
+    dist_score = max(0, 100 * (1 - (avg_dist / 2.0)))
     
     # Softened shape penalty: Maps correlation from [-1, 1] to [0.1, 1.0]
     # This prevents an instant 0% just because you dipped slightly instead of rising
@@ -93,11 +93,11 @@ def grade_lesson(user_pitch, target_pitch, u_intervals, t_intervals, user_times,
         except:
             corr = 0.5
         avg_dist = dist / len(path)
-        dist_score = max(0, 100 * (1 - (avg_dist / 1.0)))
+        dist_score = max(0, 100 * (1 - (avg_dist / 2.0)))
         shape_penalty = (corr + 1) / 2 if corr > -0.6 else 0.1
         global_score = dist_score * shape_penalty
 
-        return global_score * 0.5, [], u_aligned, t_aligned 
+        return global_score, [], u_aligned, t_aligned 
     
     syllable_scores = []
     full_u_aligned = []

@@ -1,3 +1,7 @@
+from dsp.segmentation import split_into_n
+from pypinyin import lazy_pinyin
+from dsp.segmentation import split_into_n
+from pypinyin import lazy_pinyin
 import numpy as np
 import argparse
 import sys
@@ -42,7 +46,7 @@ def run_lesson(word_to_practice, error_mode=None, tts_engine=None):
     
     # New ASR-based intervals for teacher
     t_transcription = asr.transcribe(teacher_file)
-    t_intervals = asr.extract_syllable_intervals(t_transcription)
+    t_intervals = split_into_n(teacher_file, len(lazy_pinyin(word_to_practice)))
     
     # 2. Get Student Input
     student_file = "student_attempt.wav"
@@ -63,7 +67,7 @@ def run_lesson(word_to_practice, error_mode=None, tts_engine=None):
     
     # New ASR-based intervals for student
     s_transcription = asr.transcribe(student_file)
-    s_intervals = asr.extract_syllable_intervals(s_transcription)
+    s_intervals = split_into_n(student_file, len(lazy_pinyin(word_to_practice)))
     
     # 4. Grading (The Production Logic)
     final_score, breakdown, viz_u, viz_t = grade_lesson(

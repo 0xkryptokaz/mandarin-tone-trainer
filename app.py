@@ -1,3 +1,7 @@
+from dsp.segmentation import split_into_n
+from pypinyin import lazy_pinyin
+from dsp.segmentation import split_into_n
+from pypinyin import lazy_pinyin
 import streamlit as st
 import os
 import librosa              # <-- ADD THIS LINE
@@ -38,15 +42,6 @@ with st.sidebar:
     selected_sample = st.selectbox("Select Test Sample", options=sample_files) if sample_files else None
 
 
-# QUICK MVP FIX: Trim dead air before processing
-y, sr = librosa.load("student_attempt.wav", sr=None)
-y_trimmed, _ = librosa.effects.trim(y, top_db=30) # Strips silence
-sf.write("student_attempt_clean.wav", y_trimmed, sr)
-
-# Now feed the CLEAN file to your extractors
-s_times, s_pitch = extract_pitch_contour("student_attempt_clean.wav")
-s_transcription = asr.transcribe("student_attempt_clean.wav")
-s_intervals = asr.extract_syllable_intervals(s_transcription)
 
 st.write("### 1. Teacher Reference")
 practice_text = st.text_input("Enter Mandarin text to practice:", value="你好")
@@ -92,12 +87,12 @@ if audio_value is not None:
                 # Teacher Data
                 t_times, t_pitch = extract_pitch_contour("teacher_ref.wav")
                 t_transcription = asr.transcribe("teacher_ref.wav")
-                t_intervals = asr.extract_syllable_intervals(t_transcription)
+                t_intervals = split_into_n("teacher_ref.wav", len(lazy_pinyin(practice_text)))
                 
                 # Student Data (Now using the clean, trimmed WAV!)
                 s_times, s_pitch = extract_pitch_contour("student_attempt.wav")
                 s_transcription = asr.transcribe("student_attempt.wav")
-                s_intervals = asr.extract_syllable_intervals(s_transcription)
+                s_intervals = split_into_n("student_attempt.wav", len(lazy_pinyin(practice_text)))
                 
                 # Scoring Engine
                 final_score, breakdown, viz_u, viz_t = grade_lesson(

@@ -56,3 +56,20 @@ class ASRWrapper:
             except Exception as e2:
                 print(f"❌ Total Whisper Failure: {e2}")
                 return {"text": "", "segments": []}
+    def extract_syllable_intervals(self, transcription):
+        """Return a list of (start, end) seconds, one per Chinese character."""
+        intervals = []
+        for seg in transcription.get("segments", []):
+            words = seg.get("words")
+            if words:
+                for w in words:
+                    chars = [c for c in w.get("word", "") if "\u4e00" <= c <= "\u9fff"]
+                    if not chars:
+                        continue
+                    step = (w["end"] - w["start"]) / len(chars)
+                    for i in range(len(chars)):
+                        intervals.append((w["start"] + i * step, w["start"] + (i + 1) * step))
+            else:
+                # Safe-mode fallback segment: no word timing, so use the whole span
+                intervals.append((seg["start"], seg["end"]))
+        return intervals
