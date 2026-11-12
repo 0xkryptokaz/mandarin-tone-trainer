@@ -11,3 +11,5 @@ setuptools>=65.5.0
 sounddevice>=0.5.3
 streamlit>=1.54.0
 TextGrid>=1.6.1
+numpy
+scipy
