@@ -1,0 +1,13 @@
+fastdtw>=0.3.4
+gTTS>=2.5.4
+librosa>=0.11.0
+matplotlib>=3.10.8
+openai-whisper>=20250625
+pip>=23.0.1
+praat-parselmouth>=0.4.7
+pydub>=0.25.1
+pypinyin>=0.55.0
+setuptools>=65.5.0
+sounddevice>=0.5.3
+streamlit>=1.54.0
+TextGrid>=1.6.1

@@ -1,0 +1,41 @@
+Source Filter theory
+
+Harmonic Series and Fundamental frequency
+
+Spectral Centroid 
+
+Math
+
+Convolution Theorem
+Z-score Normalization 
+
+Dynamitc Time Warping
+
+Computer science
+
+Memory management 
+Time complexity 
+
+Ring Buffer (circular buffer)
+
+4. Required Reading (Papers)
+
+Drop these names in your README.md or during an interview.
+
+    For the Scoring Logic:
+
+        📄 Paper: "Phone-level pronunciation scoring and assessment for interactive language learning" (Witt & Young).
+
+        Key Concept: GOP (Goodness of Pronunciation). This is the industry standard for scoring.
+
+    For the "zh/sh/r" Feature:
+
+        📄 Paper: "Golden Mandarin (I)—A real-time mandarin speech dictation machine" (Lin-Shan Lee et al.).
+
+        Key Concept: Using Cepstral Coefficients (MFCCs) to classify Mandarin initials.
+
+    For the Tone Sandhi Rules:
+
+        📄 Topic: Look for papers on "Mandarin Tone Sandhi Disambiguation."
+
+        In Your Code: You currently use simple if/else rules in core/generator.py. Real systems use "Conditional Random Fields" (CRF) to predict these changes.
