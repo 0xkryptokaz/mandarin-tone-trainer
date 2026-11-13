@@ -10,3 +10,26 @@ __pycache__/
 .streamlit/secrets.toml
 !samples/*.wav
 tone_comparison.png
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Audio and temporary files
+*.wav
+*.mp3
+samples/
+student_raw/
+mandarin_tts_cache/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+
+# Dependencies
+pixi.lock
