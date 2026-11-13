@@ -8,3 +8,5 @@ fastdtw>=0.3.4
 pypinyin>=0.51.0
 matplotlib>=3.8.0
 gTTS>=2.5.1
+SQLAlchemy>=2.0.30
+psycopg[binary]>=3.2.0

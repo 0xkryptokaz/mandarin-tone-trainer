@@ -15,10 +15,20 @@ from pypinyin import Style, pinyin
 
 from core.generator import generate_reference_audio
 from core.visualizer import plot_tone_comparison
+from database import (
+    DEMO_USERNAME,
+    get_or_create_user,
+    get_user_history,
+    init_db,
+    list_users,
+    log_attempt,
+)
 from dsp.features import extract_pitch_contour, to_utterance_semitones
 from dsp.scoring import grade_lesson
 from dsp.segmentation import split_into_n, warmup_segmentation
 from wrappers import ASRWrapper
+
+init_db()
 
 TARGET_SR = 16000
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
@@ -58,10 +68,7 @@ def extract_hanzi_and_pinyin(text: str) -> tuple[list[str], list[str]]:
         return [], []
 
     simp_text = to_simplified("".join(display_chars))
-    toned = [
-        item[0]
-        for item in pinyin(simp_text, style=Style.TONE)
-    ]
+    toned = [item[0] for item in pinyin(simp_text, style=Style.TONE)]
     return display_chars, toned
 
 
@@ -114,16 +121,41 @@ STUDENT_ATTEMPT_PATH = SESSION_DIR / "student_attempt.wav"
 
 
 # -----------------------------------------------------------------------------
-# Optional developer sidebar (hidden in public production unless DEV_MODE=1)
+# Sidebar: Learner Profile + Optional Developer Testing Suite
 # -----------------------------------------------------------------------------
 
 test_mode = False
 selected_sample = None
 SAMPLES_DIR = Path("samples")
 
+with st.sidebar:
+    st.header("👤 Learner Profile")
+    all_users = list_users()
+    user_names = [u["username"] for u in all_users]
+    default_idx = user_names.index(DEMO_USERNAME) if DEMO_USERNAME in user_names else 0
+
+    selected_username = st.selectbox(
+        "Active Profile",
+        options=user_names,
+        index=default_idx,
+    )
+    active_user = next(u for u in all_users if u["username"] == selected_username)
+
+    with st.expander("➕ New / Switch Profile"):
+        new_name = st.text_input("Username", placeholder="e.g. Alex")
+        new_lang = st.selectbox(
+            "Native Language",
+            ["English", "Cantonese", "Japanese", "Korean", "Spanish", "Other"],
+        )
+        if st.button("Create / Load Profile", use_container_width=True) and new_name.strip():
+            created = get_or_create_user(new_name, new_lang)
+            st.success(f"Loaded profile: {created['username']}")
+            st.rerun()
+
 if DEV_MODE:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
     with st.sidebar:
+        st.markdown("---")
         st.header("🧪 Testing Suite")
         test_mode = st.toggle(
             "Enable Sample Mode",
@@ -395,16 +427,16 @@ if audio_bytes is not None:
             else:
                 st.error(f"Assessment failed: {assessment.reason}")
 
-          # -----------------------------------------------------------------
+            # -----------------------------------------------------------------
             # Character Recognition Check (SenseVoice)
             # -----------------------------------------------------------------
 
+            heard_text = ""
             if run_transcript_check and STUDENT_ATTEMPT_PATH.is_file():
                 try:
                     with st.spinner("Verifying characters with SenseVoice..."):
-                        asr = get_asr() # Downloads/loads model (not timed)
-                        
-                        t_asr_start = time.perf_counter() # Start timer here!
+                        asr = get_asr()
+                        t_asr_start = time.perf_counter()
                         transcription = asr.transcribe(str(STUDENT_ATTEMPT_PATH))
                         asr_ms = (time.perf_counter() - t_asr_start) * 1000
 
@@ -412,7 +444,6 @@ if audio_bytes is not None:
                     heard_hanzi = "".join(
                         ch for ch in heard_text if "\u4e00" <= ch <= "\u9fff"
                     )
-
                     target_hanzi = "".join(hanzi_chars)
 
                     if to_simplified(heard_hanzi) == to_simplified(target_hanzi):
@@ -431,6 +462,53 @@ if audio_bytes is not None:
                     st.warning("Pronunciation grading completed, but SenseVoice verification failed.")
                     with st.expander("SenseVoice technical details"):
                         st.exception(exc)
+
+            # -----------------------------------------------------------------
+            # Log Attempt & Display User Progress History
+            # -----------------------------------------------------------------
+
+            if assessment.scored:
+                log_attempt(
+                    user_id=active_user["id"],
+                    phrase="".join(hanzi_chars),
+                    pinyin_str=" ".join(toned_pinyin),
+                    overall_score=assessment.overall_score,
+                    syllable_scores=assessment.syllable_scores,
+                    asr_heard=heard_text,
+                )
+
+            st.markdown("---")
+            with st.expander(f"📈 {active_user['username']}'s Practice History", expanded=True):
+                history = get_user_history(active_user["id"], limit=25)
+                if history:
+                    avg_score = sum(h["score"] for h in history) / len(history)
+                    best_score = max(h["score"] for h in history)
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Attempts", len(history))
+                    c2.metric("Average Score", f"{avg_score:.1f}%")
+                    c3.metric("Personal Best", f"{best_score:.1f}%")
+
+                    chrono = list(reversed(history))
+                    st.line_chart(
+                        {"Tone Score (%)": [h["score"] for h in chrono]},
+                        height=180,
+                    )
+                    st.dataframe(
+                        [
+                            {
+                                "Time": h["timestamp"],
+                                "Phrase": h["phrase"],
+                                "Pinyin": h["pinyin"],
+                                "Score": f"{h['score']:.1f}%",
+                                "ASR Heard": h["heard"] or "—",
+                            }
+                            for h in history[:10]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.caption("No attempts logged yet for this profile.")
 
         except Exception as exc:
             st.error(f"Pronunciation analysis failed: {exc}")

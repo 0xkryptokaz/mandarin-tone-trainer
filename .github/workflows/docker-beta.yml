@@ -51,3 +51,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-beta:
+    needs: build-and-push
+    if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Beta Hosting Deploy Webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.BETA_DEPLOY_WEBHOOK }}
+        run: |
+          if [ -n "$WEBHOOK_URL" ]; then
+            curl -fsSL -X POST "$WEBHOOK_URL"
+          else
+            echo "BETA_DEPLOY_WEBHOOK not set; skipping live redeploy."
+          fi
