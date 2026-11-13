@@ -73,12 +73,10 @@ def test_constant_f0_edge_case():
     score, _, _ = calculate_segment_score(st, st)
     assert score == pytest.approx(100.0)
 
-
 def test_interval_mismatch_returns_unscored():
-    times = np.linspace(0.0, 1.0, 20)
-    pitch = np.linspace(-2.0, 2.0, 20)
-    res = grade_lesson(pitch, pitch, [(0.0, 0.4)], [(0.0, 0.4), (0.5, 0.9)], times, times)
-    assert res.scored is False
-    assert "interval mismatch" in (res.reason or "").lower()
-    assert res.overall_score is None
-    assert "interval_mismatch" in (res.reason or "")
+        times = np.linspace(0.0, 1.0, 20)
+        pitch = np.linspace(-2.0, 2.0, 20)
+        res = grade_lesson(pitch, pitch, [(0.0, 0.4)], [(0.0, 0.4), (0.5, 0.9)], times, times)
+        assert res.scored is False
+        assert res.overall_score is None
+        assert "interval mismatch" in (res.reason or "").lower()
