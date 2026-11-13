@@ -79,5 +79,6 @@ def test_interval_mismatch_returns_unscored():
     pitch = np.linspace(-2.0, 2.0, 20)
     res = grade_lesson(pitch, pitch, [(0.0, 0.4)], [(0.0, 0.4), (0.5, 0.9)], times, times)
     assert res.scored is False
+    assert "interval mismatch" in (res.reason or "").lower()
     assert res.overall_score is None
     assert "interval_mismatch" in (res.reason or "")
