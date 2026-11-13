@@ -11,7 +11,28 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test-dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system audio libs & Python deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          pip install -r requirements.txt pytest
+
+      - name: Run DSP & database unit tests
+        run: pytest -v
+
   build-and-push:
+    needs: test-dsp
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,18 +72,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy-beta:
-    needs: build-and-push
-    if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Beta Hosting Deploy Webhook
-        env:
-          WEBHOOK_URL: ${{ secrets.BETA_DEPLOY_WEBHOOK }}
-        run: |
-          if [ -n "$WEBHOOK_URL" ]; then
-            curl -fsSL -X POST "$WEBHOOK_URL"
-          else
-            echo "BETA_DEPLOY_WEBHOOK not set; skipping live redeploy."
-          fi
