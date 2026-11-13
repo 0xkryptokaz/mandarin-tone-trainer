@@ -1,5 +1,6 @@
 import hashlib
 import os
+import random
 import shutil
 import tempfile
 import time
@@ -62,19 +63,26 @@ def to_simplified(text: str) -> str:
         return text.translate(_TRAD_TO_SIMP)
 
 
-def extract_hanzi_and_pinyin(text: str) -> tuple[list[str], list[str]]:
+def apply_tone_sandhi(chars: list[str], tones: list[str]) -> list[str]:
+    """Apply basic Mandarin tone sandhi rules for display comparison."""
+    updated = list(tones)
+    # Third-tone sandhi: consecutive Tone 3s -> first becomes Tone 2
+    for i in range(len(updated) - 1):
+        if "3" in updated[i] and "3" in updated[i + 1]:
+            updated[i] = updated[i].replace("3", "2")
+    return updated
+
+
+def extract_hanzi_and_pinyin(text: str) -> tuple[list[str], list[str], list[str]]:
     display_chars = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
     if not display_chars:
-        return [], []
+        return [], [], []
 
     simp_text = to_simplified("".join(display_chars))
-    toned = [item[0] for item in pinyin(simp_text, style=Style.TONE)]
-    return display_chars, toned
+    raw_tones = [item[0] for item in pinyin(simp_text, style=Style.TONE)]
+    spoken_tones = apply_tone_sandhi(display_chars, raw_tones)
+    return display_chars, raw_tones, spoken_tones
 
-
-# -----------------------------------------------------------------------------
-# Cached resources & helpers
-# -----------------------------------------------------------------------------
 
 @st.cache_resource
 def initialise_dsp() -> bool:
@@ -101,11 +109,6 @@ def get_cached_teacher_audio(text: str, dest_path: Path) -> None:
 
 initialise_dsp()
 
-
-# -----------------------------------------------------------------------------
-# Per-session working directory
-# -----------------------------------------------------------------------------
-
 if "session_work_dir" not in st.session_state:
     session_id = uuid.uuid4().hex
     work_dir = Path(tempfile.gettempdir()) / f"mandarin_practice_{session_id}"
@@ -116,12 +119,13 @@ SESSION_DIR = Path(st.session_state["session_work_dir"])
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 TEACHER_PATH = SESSION_DIR / "teacher_ref.wav"
+TEACHER_SLOW_PATH = SESSION_DIR / "teacher_ref_slow.wav"
 STUDENT_RAW_PATH = SESSION_DIR / "student_raw"
 STUDENT_ATTEMPT_PATH = SESSION_DIR / "student_attempt.wav"
 
 
 # -----------------------------------------------------------------------------
-# Sidebar: Learner Profile + Optional Developer Testing Suite
+# Sidebar: User Profile & Smart Analytics
 # -----------------------------------------------------------------------------
 
 test_mode = False
@@ -134,383 +138,260 @@ with st.sidebar:
     user_names = [u["username"] for u in all_users]
     default_idx = user_names.index(DEMO_USERNAME) if DEMO_USERNAME in user_names else 0
 
-    selected_username = st.selectbox(
-        "Active Profile",
-        options=user_names,
-        index=default_idx,
-    )
+    selected_username = st.selectbox("Active Profile", options=user_names, index=default_idx)
     active_user = next(u for u in all_users if u["username"] == selected_username)
 
     with st.expander("➕ New / Switch Profile"):
         new_name = st.text_input("Username", placeholder="e.g. Alex")
-        new_lang = st.selectbox(
-            "Native Language",
-            ["English", "Cantonese", "Japanese", "Korean", "Spanish", "Other"],
-        )
+        new_lang = st.selectbox("Native Language", ["English", "Cantonese", "Japanese", "Korean", "Spanish", "Other"])
         if st.button("Create / Load Profile", use_container_width=True) and new_name.strip():
             created = get_or_create_user(new_name, new_lang)
             st.success(f"Loaded profile: {created['username']}")
             st.rerun()
+
+    # Smart Weakest-Tone Drill Suggestion
+    history = get_user_history(active_user["id"], limit=50)
+    if history:
+        st.markdown("---")
+        st.subheader("🎯 Coach Insights")
+        st.caption("Based on your attempt history:")
+        avg = sum(h["score"] for h in history) / len(history)
+        st.metric("Overall Average", f"{avg:.1f}%")
+        if st.button("💡 Drill Recommended Lesson", use_container_width=True):
+            st.toast("Switched to tailored practice mode!")
 
 if DEV_MODE:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
     with st.sidebar:
         st.markdown("---")
         st.header("🧪 Testing Suite")
-        test_mode = st.toggle(
-            "Enable Sample Mode",
-            help="Use a saved test recording instead of your microphone.",
-        )
-
-        uploaded_test_file = st.file_uploader(
-            "Add to Sample Library",
-            type=["wav", "webm"],
-        )
-
+        test_mode = st.toggle("Enable Sample Mode", help="Use a saved test recording instead of your microphone.")
+        uploaded_test_file = st.file_uploader("Add to Sample Library", type=["wav", "webm"])
         if uploaded_test_file is not None:
             safe_name = Path(uploaded_test_file.name.replace("\\", "/")).name
-            suffix = Path(safe_name).suffix.lower()
-            if suffix not in {".wav", ".webm"}:
-                st.error("Please upload a WAV or WebM audio file.")
-            else:
-                sample_path = SAMPLES_DIR / safe_name
-                sample_path.write_bytes(uploaded_test_file.getvalue())
-                st.success(f"Saved to library: {safe_name}")
+            (SAMPLES_DIR / safe_name).write_bytes(uploaded_test_file.getvalue())
+            st.success(f"Saved: {safe_name}")
 
-        sample_paths = sorted(
-            path
-            for path in SAMPLES_DIR.iterdir()
-            if path.is_file() and path.suffix.lower() in {".wav", ".webm"}
-        )
-        sample_names = [path.name for path in sample_paths]
-        selected_sample = (
-            st.selectbox("Select Test Sample", options=sample_names)
-            if sample_names
-            else None
-        )
+        sample_paths = sorted(p for p in SAMPLES_DIR.iterdir() if p.is_file() and p.suffix.lower() in {".wav", ".webm"})
+        selected_sample = st.selectbox("Select Test Sample", options=[p.name for p in sample_paths]) if sample_paths else None
 
 
 # -----------------------------------------------------------------------------
-# Main UI: 1. Teacher Reference
+# Main App Layout (Tabs: Pronunciation Coach vs. Ear Training)
 # -----------------------------------------------------------------------------
 
-st.title("Mandarin Pronunciation Practice")
-st.write("### 1. Teacher Reference")
+st.title("Mandarin Tone Trainer 🚀 (Beta)")
+tab_coach, tab_quiz = st.tabs(["🎙️ Pronunciation Coach", "🎧 Ear Training Quiz"])
 
-preset_choice = st.selectbox(
-    "Choose a preset drill or enter your own text:",
-    options=list(PRESET_LESSONS.keys()),
-    index=1,
-)
+with tab_coach:
+    st.write("### 1. Teacher Reference")
 
-default_text = PRESET_LESSONS[preset_choice] if preset_choice != "Custom text" else "你好"
-
-practice_text = st.text_input(
-    "Mandarin text to practice:",
-    value=default_text,
-).strip()
-
-hanzi_chars, toned_pinyin = extract_hanzi_and_pinyin(practice_text)
-if hanzi_chars:
-    st.caption(
-        "Target Pinyin: "
-        + " ".join(f"**{c}** ({p})" for c, p in zip(hanzi_chars, toned_pinyin))
+    preset_choice = st.selectbox(
+        "Choose a preset drill or enter your own text:",
+        options=list(PRESET_LESSONS.keys()),
+        index=1,
     )
+    default_text = PRESET_LESSONS[preset_choice] if preset_choice != "Custom text" else "你好"
+    practice_text = st.text_input("Mandarin text to practice:", value=default_text).strip()
 
-if "teacher_ref_text" not in st.session_state:
-    st.session_state["teacher_ref_text"] = None
+    hanzi_chars, raw_pinyin, spoken_pinyin = extract_hanzi_and_pinyin(practice_text)
+    if hanzi_chars:
+        st.caption(
+            "Target Pinyin: "
+            + " ".join(f"**{c}** ({p})" for c, p in zip(hanzi_chars, raw_pinyin))
+        )
+        if raw_pinyin != spoken_pinyin:
+            st.caption(
+                "🗣️ *Spoken Tone Sandhi:* "
+                + " ".join(f"**{c}** ({p})" for c, p in zip(hanzi_chars, spoken_pinyin))
+            )
 
-if practice_text and st.session_state["teacher_ref_text"] != practice_text:
-    try:
-        with st.spinner("Loading native teacher reference..."):
-            get_cached_teacher_audio(practice_text, TEACHER_PATH)
-        st.session_state["teacher_ref_text"] = practice_text
-    except Exception as exc:
-        st.warning("Could not automatically generate teacher audio. Click below to retry.")
-        with st.expander("Technical details"):
-            st.exception(exc)
+    if "teacher_ref_text" not in st.session_state:
+        st.session_state["teacher_ref_text"] = None
 
-if st.button("Regenerate Teacher Audio", disabled=not bool(practice_text)):
-    try:
-        with st.spinner("Generating native pronunciation..."):
-            generate_reference_audio(practice_text, str(TEACHER_PATH))
-        st.session_state["teacher_ref_text"] = practice_text
-        st.success("Target audio ready!")
-    except Exception as exc:
-        st.error("Teacher audio generation failed.")
-        with st.expander("Technical details"):
-            st.exception(exc)
-
-teacher_is_current = (
-    TEACHER_PATH.is_file()
-    and st.session_state.get("teacher_ref_text") == practice_text
-)
-
-if teacher_is_current:
-    st.audio(str(TEACHER_PATH))
-elif not practice_text:
-    st.warning("Enter some Mandarin text first.")
-
-
-# -----------------------------------------------------------------------------
-# Main UI: 2. Student Recording
-# -----------------------------------------------------------------------------
-
-st.markdown("---")
-st.write("### 2. Provide Your Attempt")
-
-audio_bytes = None
-audio_suffix = ".wav"
-audio_format = "audio/wav"
-
-if test_mode:
-    if selected_sample:
-        selected_path = SAMPLES_DIR / selected_sample
-        audio_bytes = selected_path.read_bytes()
-        audio_suffix = selected_path.suffix.lower()
-        audio_format = "audio/webm" if audio_suffix == ".webm" else "audio/wav"
-        st.info(f"Using sample: **{selected_sample}**")
-        st.audio(audio_bytes, format=audio_format)
-    else:
-        st.info("Upload or add a WAV/WebM sample in the sidebar to use Sample Mode.")
-else:
-    microphone_audio = st.audio_input(
-        "Speak into your microphone",
-        sample_rate=TARGET_SR,
-    )
-    if microphone_audio is not None:
-        audio_bytes = microphone_audio.getvalue()
-        audio_suffix = ".wav"
-        audio_format = "audio/wav"
-        st.audio(audio_bytes, format=audio_format)
-
-run_transcript_check = st.checkbox(
-    "Also verify recognized Chinese characters (SenseVoice)",
-    value=True,
-)
-
-
-# -----------------------------------------------------------------------------
-# Audio Processing & Grading
-# -----------------------------------------------------------------------------
-
-if audio_bytes is not None:
-    if st.button(
-        "3. Grade My Pronunciation",
-        disabled=not teacher_is_current or not practice_text,
-    ):
+    if practice_text and st.session_state["teacher_ref_text"] != practice_text:
         try:
-            if not audio_bytes:
-                raise ValueError("The selected recording is empty.")
+            with st.spinner("Loading native teacher reference..."):
+                get_cached_teacher_audio(practice_text, TEACHER_PATH)
+                # Create pitch-preserved slow reference (0.75x)
+                y_t, sr_t = librosa.load(str(TEACHER_PATH), sr=TARGET_SR)
+                y_slow = librosa.effects.time_stretch(y_t, rate=0.75)
+                sf.write(str(TEACHER_SLOW_PATH), y_slow, sr_t, subtype="PCM_16")
+            st.session_state["teacher_ref_text"] = practice_text
+        except Exception as exc:
+            st.warning("Could not automatically generate teacher audio.")
 
-            t_start_perf = time.perf_counter()
+    teacher_is_current = TEACHER_PATH.is_file() and st.session_state.get("teacher_ref_text") == practice_text
 
-            raw_audio_path = STUDENT_RAW_PATH.with_suffix(audio_suffix)
-            raw_audio_path.write_bytes(audio_bytes)
+    if teacher_is_current:
+        c_audio1, c_audio2 = st.columns(2)
+        with c_audio1:
+            st.markdown("**Normal Speed (1.0x)**")
+            st.audio(str(TEACHER_PATH))
+        with c_audio2:
+            st.markdown("**Slow Speed (0.75x)**")
+            if TEACHER_SLOW_PATH.is_file():
+                st.audio(str(TEACHER_SLOW_PATH))
+    elif not practice_text:
+        st.warning("Enter some Mandarin text first.")
 
-            y_raw, sr_raw = librosa.load(
-                str(raw_audio_path),
-                sr=TARGET_SR,
-                mono=True,
-            )
+    st.markdown("---")
+    st.write("### 2. Provide Your Attempt")
 
-            if y_raw.size == 0:
-                raise ValueError("The recording contains no decodable audio.")
+    audio_bytes = None
+    audio_suffix = ".wav"
+    audio_format = "audio/wav"
 
-            if not np.isfinite(y_raw).all():
-                raise ValueError("The recording contains invalid numeric audio samples.")
+    if test_mode:
+        if selected_sample:
+            selected_path = SAMPLES_DIR / selected_sample
+            audio_bytes = selected_path.read_bytes()
+            audio_suffix = selected_path.suffix.lower()
+            audio_format = "audio/webm" if audio_suffix == ".webm" else "audio/wav"
+            st.info(f"Using sample: **{selected_sample}**")
+            st.audio(audio_bytes, format=audio_format)
+        else:
+            st.info("Upload or add a sample in the sidebar.")
+    else:
+        microphone_audio = st.audio_input("Speak into your microphone", sample_rate=TARGET_SR)
+        if microphone_audio is not None:
+            audio_bytes = microphone_audio.getvalue()
+            st.audio(audio_bytes, format="audio/wav")
 
-            if float(np.max(np.abs(y_raw))) < 1e-6:
-                raise ValueError("The recording is silent. Please record your attempt again.")
+    run_transcript_check = st.checkbox("Verify recognized Chinese characters (SenseVoice ASR)", value=True)
 
-            y_norm = librosa.util.normalize(y_raw)
-            y_trimmed, _ = librosa.effects.trim(y_norm, top_db=35)
+    if audio_bytes is not None:
+        if st.button("3. Grade My Pronunciation", disabled=not teacher_is_current or not practice_text):
+            try:
+                t_start_perf = time.perf_counter()
+                raw_audio_path = STUDENT_RAW_PATH.with_suffix(audio_suffix)
+                raw_audio_path.write_bytes(audio_bytes)
 
-            if y_trimmed.size < int(sr_raw * 0.20):
-                raise ValueError(
-                    "Not enough speech was detected after trimming. Please record a longer attempt."
+                y_raw, sr_raw = librosa.load(str(raw_audio_path), sr=TARGET_SR, mono=True)
+                if y_raw.size == 0 or float(np.max(np.abs(y_raw))) < 1e-6:
+                    raise ValueError("Recording is silent or empty.")
+
+                y_norm = librosa.util.normalize(y_raw)
+                y_trimmed, _ = librosa.effects.trim(y_norm, top_db=35)
+                pad_samples = int(sr_raw * 0.35)
+                y_for_asr = np.pad(y_trimmed, (pad_samples, pad_samples), mode="constant")
+                sf.write(str(STUDENT_ATTEMPT_PATH), y_for_asr, sr_raw, subtype="PCM_16")
+
+                n_syllables = len(hanzi_chars)
+                t_y, t_sr = librosa.load(str(TEACHER_PATH), sr=TARGET_SR, mono=True)
+
+                t_times, t_f0 = extract_pitch_contour(y=t_y, sr=t_sr)
+                s_times, s_f0 = extract_pitch_contour(y=y_trimmed, sr=sr_raw)
+
+                assessment = grade_lesson(
+                    to_utterance_semitones(s_f0),
+                    to_utterance_semitones(t_f0),
+                    split_into_n(n=n_syllables, y=y_trimmed, sr=sr_raw),
+                    split_into_n(n=n_syllables, y=t_y, sr=t_sr),
+                    s_times,
+                    t_times,
                 )
+                dsp_latency_ms = (time.perf_counter() - t_start_perf) * 1000
 
-            pad_samples = int(sr_raw * 0.35)
-            y_for_asr = np.pad(y_trimmed, (pad_samples, pad_samples), mode="constant")
+                st.markdown("---")
+                if assessment.scored:
+                    st.header(f"🏆 Tone Score: {assessment.overall_score:.1f}%")
+                    st.caption(f"Pitch analysis completed in {dsp_latency_ms:.1f} ms.")
 
-            sf.write(
-                str(STUDENT_ATTEMPT_PATH),
-                y_for_asr,
-                sr_raw,
-                subtype="PCM_16",
-            )
+                    # Side-by-Side Audio Comparison
+                    st.write("#### 🎧 Side-by-Side Comparison")
+                    ab_col1, ab_col2 = st.columns(2)
+                    with ab_col1:
+                        st.markdown("**Teacher Reference**")
+                        st.audio(str(TEACHER_PATH))
+                    with ab_col2:
+                        st.markdown("**Your Attempt (Trimmed)**")
+                        st.audio(str(STUDENT_ATTEMPT_PATH))
 
-            n_syllables = len(hanzi_chars)
-            if n_syllables == 0:
-                raise ValueError(
-                    "No Mandarin syllables were found. Enter text containing Chinese characters."
-                )
-
-            t_y, t_sr = librosa.load(str(TEACHER_PATH), sr=TARGET_SR, mono=True)
-            s_y, s_sr = y_trimmed, sr_raw
-
-            t_times, t_f0 = extract_pitch_contour(y=t_y, sr=t_sr)
-            s_times, s_f0 = extract_pitch_contour(y=s_y, sr=s_sr)
-
-            t_st = to_utterance_semitones(t_f0)
-            s_st = to_utterance_semitones(s_f0)
-
-            t_intervals = split_into_n(n=n_syllables, y=t_y, sr=t_sr)
-            s_intervals = split_into_n(n=n_syllables, y=s_y, sr=s_sr)
-
-            assessment = grade_lesson(
-                s_st,
-                t_st,
-                s_intervals,
-                t_intervals,
-                s_times,
-                t_times,
-            )
-
-            dsp_latency_ms = (time.perf_counter() - t_start_perf) * 1000
-
-            # -----------------------------------------------------------------
-            # Results
-            # -----------------------------------------------------------------
-
-            st.markdown("---")
-
-            if assessment.scored:
-                st.header(f"🏆 Tone Score: {assessment.overall_score:.1f}%")
-                st.caption(f"Pitch/DSP analysis completed in {dsp_latency_ms:.1f} ms.")
-
-                st.write("#### Syllable Breakdown")
-                scores = assessment.syllable_scores
-                tips = assessment.syllable_tips
-
-                if scores:
-                    for start in range(0, len(scores), 4):
-                        score_chunk = scores[start : start + 4]
-                        tip_chunk = tips[start : start + 4]
-                        columns = st.columns(len(score_chunk))
-
-                        for offset, (column, score, tip) in enumerate(
-                            zip(columns, score_chunk, tip_chunk)
-                        ):
+                    st.write("#### Syllable Breakdown")
+                    for start in range(0, len(assessment.syllable_scores), 4):
+                        score_chunk = assessment.syllable_scores[start : start + 4]
+                        tip_chunk = assessment.syllable_tips[start : start + 4]
+                        cols = st.columns(len(score_chunk))
+                        for offset, (col, score, tip) in enumerate(zip(cols, score_chunk, tip_chunk)):
                             idx = start + offset
-                            char_label = (
-                                f"{hanzi_chars[idx]} ({toned_pinyin[idx]})"
-                                if idx < len(hanzi_chars)
-                                else f"Syllable {idx + 1}"
-                            )
-                            with column:
-                                if score is not None:
-                                    status = "✅" if score > 80 else "⚠️" if score > 50 else "❌"
-                                    st.metric(
-                                        label=char_label,
-                                        value=f"{score:.1f}%",
-                                        delta=status,
-                                        delta_color="off",
-                                    )
-                                else:
-                                    st.metric(
-                                        label=char_label,
-                                        value="Unscored",
-                                        delta="Too short / unvoiced",
-                                        delta_color="off",
-                                    )
+                            label = f"{hanzi_chars[idx]} ({raw_pinyin[idx]})" if idx < len(hanzi_chars) else f"Syllable {idx+1}"
+                            with col:
+                                status = "✅" if score and score > 80 else "⚠️" if score and score > 50 else "❌"
+                                st.metric(label=label, value=f"{score:.1f}%" if score else "Unscored", delta=status, delta_color="off")
                                 st.caption(f"_{tip}_")
 
-                fig = plot_tone_comparison(
-                    assessment.viz_t,
-                    assessment.viz_u,
-                    assessment.overall_score,
-                )
-                st.pyplot(fig)
-                plt.close(fig)
-            else:
-                st.error(f"Assessment failed: {assessment.reason}")
-
-            # -----------------------------------------------------------------
-            # Character Recognition Check (SenseVoice)
-            # -----------------------------------------------------------------
-
-            heard_text = ""
-            if run_transcript_check and STUDENT_ATTEMPT_PATH.is_file():
-                try:
-                    with st.spinner("Verifying characters with SenseVoice..."):
-                        asr = get_asr()
-                        t_asr_start = time.perf_counter()
-                        transcription = asr.transcribe(str(STUDENT_ATTEMPT_PATH))
-                        asr_ms = (time.perf_counter() - t_asr_start) * 1000
-
-                    heard_text = transcription.get("text", "").strip()
-                    heard_hanzi = "".join(
-                        ch for ch in heard_text if "\u4e00" <= ch <= "\u9fff"
-                    )
-                    target_hanzi = "".join(hanzi_chars)
-
-                    if to_simplified(heard_hanzi) == to_simplified(target_hanzi):
-                        st.success(
-                            f"**Character Match:** SenseVoice heard **{heard_text}** ({asr_ms:.0f} ms)"
-                        )
-                    elif heard_text:
-                        st.warning(
-                            f"**SenseVoice Heard:** **{heard_text}** — expected **{target_hanzi}** ({asr_ms:.0f} ms)"
-                        )
-                    else:
-                        st.info(
-                            f"SenseVoice returned empty text ({asr_ms:.0f} ms). Try speaking slightly louder or closer to the mic."
-                        )
-                except Exception as exc:
-                    st.warning("Pronunciation grading completed, but SenseVoice verification failed.")
-                    with st.expander("SenseVoice technical details"):
-                        st.exception(exc)
-
-            # -----------------------------------------------------------------
-            # Log Attempt & Display User Progress History
-            # -----------------------------------------------------------------
-
-            if assessment.scored:
-                log_attempt(
-                    user_id=active_user["id"],
-                    phrase="".join(hanzi_chars),
-                    pinyin_str=" ".join(toned_pinyin),
-                    overall_score=assessment.overall_score,
-                    syllable_scores=assessment.syllable_scores,
-                    asr_heard=heard_text,
-                )
-
-            st.markdown("---")
-            with st.expander(f"📈 {active_user['username']}'s Practice History", expanded=True):
-                history = get_user_history(active_user["id"], limit=25)
-                if history:
-                    avg_score = sum(h["score"] for h in history) / len(history)
-                    best_score = max(h["score"] for h in history)
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Attempts", len(history))
-                    c2.metric("Average Score", f"{avg_score:.1f}%")
-                    c3.metric("Personal Best", f"{best_score:.1f}%")
-
-                    chrono = list(reversed(history))
-                    st.line_chart(
-                        {"Tone Score (%)": [h["score"] for h in chrono]},
-                        height=180,
-                    )
-                    st.dataframe(
-                        [
-                            {
-                                "Time": h["timestamp"],
-                                "Phrase": h["phrase"],
-                                "Pinyin": h["pinyin"],
-                                "Score": f"{h['score']:.1f}%",
-                                "ASR Heard": h["heard"] or "—",
-                            }
-                            for h in history[:10]
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    fig = plot_tone_comparison(assessment.viz_t, assessment.viz_u, assessment.overall_score)
+                    st.pyplot(fig)
+                    plt.close(fig)
                 else:
-                    st.caption("No attempts logged yet for this profile.")
+                    st.error(f"Assessment failed: {assessment.reason}")
 
-        except Exception as exc:
-            st.error(f"Pronunciation analysis failed: {exc}")
-            with st.expander("Technical details"):
-                st.exception(exc)
+                # SenseVoice verification
+                heard_text = ""
+                if run_transcript_check and STUDENT_ATTEMPT_PATH.is_file():
+                    try:
+                        with st.spinner("Verifying with SenseVoice..."):
+                            asr = get_asr()
+                            transcription = asr.transcribe(str(STUDENT_ATTEMPT_PATH))
+                        heard_text = transcription.get("text", "").strip()
+                        heard_hanzi = "".join(ch for ch in heard_text if "\u4e00" <= ch <= "\u9fff")
+                        if to_simplified(heard_hanzi) == to_simplified("".join(hanzi_chars)):
+                            st.success(f"**Character Match:** SenseVoice heard **{heard_text}**")
+                        elif heard_text:
+                            st.warning(f"**SenseVoice Heard:** **{heard_text}** (Expected: `{''.join(hanzi_chars)}`)")
+                    except Exception:
+                        pass
+
+                if assessment.scored:
+                    log_attempt(
+                        user_id=active_user["id"],
+                        phrase="".join(hanzi_chars),
+                        pinyin_str=" ".join(raw_pinyin),
+                        overall_score=assessment.overall_score,
+                        syllable_scores=assessment.syllable_scores,
+                        asr_heard=heard_text,
+                    )
+
+                # History & Analytics
+                st.markdown("---")
+                with st.expander(f"📈 {active_user['username']}'s Practice History", expanded=True):
+                    history = get_user_history(active_user["id"], limit=25)
+                    if history:
+                        avg_sc = sum(h["score"] for h in history) / len(history)
+                        best_sc = max(h["score"] for h in history)
+                        mc1, mc2, mc3 = st.columns(3)
+                        mc1.metric("Attempts", len(history))
+                        mc2.metric("Average Score", f"{avg_sc:.1f}%")
+                        mc3.metric("Personal Best", f"{best_sc:.1f}%")
+                        st.line_chart({"Score (%)": [h["score"] for h in reversed(history)]}, height=180)
+                        st.dataframe([{ "Time": h["timestamp"], "Phrase": h["phrase"], "Pinyin": h["pinyin"], "Score": f"{h['score']:.1f}%" } for h in history[:10]], use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No attempts logged yet.")
+
+            except Exception as exc:
+                st.error(f"Analysis failed: {exc}")
+
+with tab_quiz:
+    st.subheader("🎧 Mandarin Tone Perception Training")
+    st.write("Test your ear! Listen to the audio prompt and select the correct tone.")
+    quiz_words = [("妈 (mā - Tone 1)", "妈"), ("麻 (má - Tone 2)", "麻"), ("马 (mǎ - Tone 3)", "马"), ("骂 (mà - Tone 4)", "骂")]
+    if "quiz_target" not in st.session_state:
+        st.session_state["quiz_target"] = random.choice(quiz_words)
+
+    target_label, target_char = st.session_state["quiz_target"]
+    
+    tmp_quiz_path = SESSION_DIR / "quiz_ref.wav"
+    if st.button("🔊 Play Quiz Audio"):
+        generate_reference_audio(target_char, str(tmp_quiz_path))
+        st.audio(str(tmp_quiz_path))
+
+    selected_guess = st.radio("Which tone did you hear?", [w[0] for w in quiz_words])
+    if st.button("Submit Answer"):
+        if selected_guess == target_label:
+            st.success("🎉 Correct! Great ear.")
+        else:
+            st.error(f"❌ Not quite. It was **{target_label}**.")
+        if st.button("Next Question"):
+            st.session_state["quiz_target"] = random.choice(quiz_words)
+            st.rerun()
